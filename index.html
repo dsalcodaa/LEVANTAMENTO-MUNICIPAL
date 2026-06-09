@@ -1,0 +1,329 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel Censitário — Censo 2022 (Amazonas)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1f2937}
+  #app{display:flex;height:100vh;overflow:hidden}
+  #sidebar{width:320px;flex-shrink:0;background:#fff;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;overflow-y:auto}
+  #map{flex:1;position:relative}
+  .pad{padding:14px 16px}
+  h1{font-size:16px;display:flex;align-items:center;gap:8px}
+  h1 .dot{width:10px;height:10px;border-radius:50%;background:#e11d48}
+  .sub{font-size:12px;color:#6b7280;margin-top:2px}
+  .grp{border-top:1px solid #f1f5f9;padding:12px 16px}
+  .lbl{font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+  select{width:100%;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:14px;background:#fff}
+  .ind{display:block;width:100%;text-align:left;font-size:13px;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:none;cursor:pointer;margin-bottom:2px}
+  .ind:hover{background:#f8fafc}
+  .ind.active{background:#fff1f2;border-color:#fecdd3;color:#be123c;font-weight:600}
+  .toggle{width:100%;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+  .toggle.on{background:#fff7ed;border-color:#fed7aa;color:#c2410c}
+  .btn{width:100%;padding:10px;border:none;border-radius:10px;background:#1f2937;color:#fff;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+  .btn:hover{background:#111827}
+  #cards{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .card{border:1px solid #e5e7eb;border-radius:10px;padding:10px}
+  .card .k{font-size:10px;color:#9ca3af;text-transform:uppercase}
+  .card .v{font-size:16px;font-weight:700;margin-top:2px}
+  #legend{position:absolute;bottom:18px;left:18px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,.08);z-index:2}
+  #legend .bar{display:flex;border-radius:4px;overflow:hidden;margin:6px 0}
+  #legend .bar span{width:26px;height:10px}
+  #legend .row{display:flex;justify-content:space-between;color:#6b7280}
+  #loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;padding:14px 18px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.12);font-size:13px;z-index:3}
+  .maplibregl-popup-content{font-size:12px;border-radius:8px}
+</style>
+
+<div id="app">
+  <aside id="sidebar">
+    <div class="pad">
+      <h1><span class="dot"></span> Painel Censitário</h1>
+      <div class="sub">Censo 2022 · IBGE · Amazonas · setores censitários</div>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Indicador (camada)</div>
+      <div id="indicadores"></div>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Município</div>
+      <select id="selMun"></select>
+      <div class="lbl" style="margin-top:12px">Bairro</div>
+      <select id="selBairro"></select>
+      <button id="btnHeat" class="toggle" style="margin-top:12px">⊞ Mapa de calor: desligado</button>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Panorama do recorte</div>
+      <div id="cards"></div>
+    </div>
+
+    <div class="grp">
+      <button id="btnPdf" class="btn">⤓ Imprimir panorama em PDF</button>
+    </div>
+  </aside>
+
+  <div id="map">
+    <div id="loading">Carregando dados…</div>
+    <div id="legend"></div>
+  </div>
+</div>
+
+<script>
+// ---------- Configuração dos indicadores ----------
+const RAMPS = {
+  YlOrRd:["#ffffb2","#fecc5c","#fd8d3c","#f03b20","#bd0026","#7f0000"],
+  Viridis:["#440154","#3b528b","#21918c","#5ec962","#addc30","#fde725"],
+  Blues:["#eff3ff","#c6dbef","#9ecae1","#6baed6","#3182bd","#08519c"],
+  PuRd:["#f1eef6","#d4b9da","#c994c7","#df65b0","#dd1c77","#980043"],
+  PuOr:["#b35806","#f1a340","#fee0b6","#d8daeb","#998ec3","#542788"],
+  GnBu:["#f0f9e8","#ccebc5","#a8ddb5","#7bccc4","#43a2ca","#0868ac"]
+};
+const INDICADORES = {
+  _renda:{label:"Renda média do responsável", ramp:"YlOrRd", fmt:v=>"R$ "+miles(v)},
+  _dens:{label:"Densidade populacional", ramp:"Viridis", fmt:v=>miles(v)+" hab/km²"},
+  _pop:{label:"População total", ramp:"Blues", fmt:v=>miles(v)+" hab"},
+  _env:{label:"Índice de envelhecimento", ramp:"PuRd", fmt:v=>v.toFixed(1)},
+  _raz:{label:"Razão de sexo (M/F)", ramp:"PuOr", fmt:v=>v.toFixed(1)},
+  _mor:{label:"Moradores por domicílio", ramp:"GnBu", fmt:v=>v.toFixed(2)}
+};
+function miles(n){return (Math.round(n)).toLocaleString("pt-BR");}
+
+let indKey="_renda", heat=false, allFeats=[], munSel="(todos)", bairroSel="(todos)";
+
+// ---------- Mock usado SÓ se o setores_am.geojson não for encontrado ----------
+function mockGeo(){
+  const f=[],base=[-60.02,-3.10];const bairros=["Centro","Adrianópolis","Cidade Nova","Compensa"];
+  let r=42;const rnd=()=>{r=(r*48271)%2147483647;return r/2147483647;};
+  for(let b=0;b<4;b++)for(let s=0;s<6;s++){
+    const ox=base[0]+(b%2)*0.05+(s%3)*0.015, oy=base[1]-Math.floor(b/2)*0.05-Math.floor(s/3)*0.015;
+    const d=0.013;
+    f.push({type:"Feature",properties:{
+      CD_SETOR:`130260300${b}${s}`,NM_MUN:"Manaus",NM_BAIRRO:bairros[b],AREA_KM2:+(0.1+rnd()*0.4).toFixed(3),
+      V01006:Math.round(400+rnd()*2600),V01007:0,V01008:0,v0001:Math.round(120+rnd()*700),
+      V06004:Math.round(1100+rnd()*6500)},
+      geometry:{type:"Polygon",coordinates:[[[ox,oy],[ox+d,oy],[ox+d,oy-d],[ox,oy-d],[ox,oy]]]}});
+  }
+  return {type:"FeatureCollection",features:f};
+}
+
+// ---------- Cálculo de indicadores derivados em cada feature ----------
+function enrich(fc){
+  fc.features.forEach(ft=>{
+    const p=ft.properties;
+    const pop = num(p.pop ?? p.V01006);
+    const area = num(p.AREA_KM2);
+    const renda = num(p.renda_resp ?? p.V06004);
+    const masc = num(p.V01007), fem = num(p.V01008);
+    const cri = num(p.V01031)+num(p.V01032)+num(p.V01033);
+    const idoso = num(p.V01040)+num(p.V01041);
+    const dom = num(p.v0001);
+    p._pop = pop;
+    p._renda = renda>0?renda:null;
+    p._dens = (pop&&area)? pop/area : null;
+    p._raz = (masc&&fem)? masc/fem*100 : null;
+    p._env = (cri>0)? idoso/cri*100 : null;
+    p._mor = (pop&&dom)? pop/dom : (p.mor_dom??null);
+    if(p.densidade!=null)p._dens=num(p.densidade);
+    if(p.razao_sexo!=null)p._raz=num(p.razao_sexo);
+    if(p.envelhecimento!=null)p._env=num(p.envelhecimento);
+  });
+  return fc;
+}
+function num(x){const n=parseFloat(x);return isNaN(n)?0:n;}
+
+// ---------- Mapa ----------
+const map=new maplibregl.Map({
+  container:"map",
+  style:{version:8,sources:{osm:{type:"raster",tiles:["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png","https://b.tile.openstreetmap.org/{z}/{x}/{y}.png"],tileSize:256,attribution:"© OpenStreetMap"}},layers:[{id:"osm",type:"raster",source:"osm"}]},
+  center:[-60.0,-3.1],zoom:10
+});
+map.addControl(new maplibregl.NavigationControl(),"top-right");
+
+let popup=new maplibregl.Popup({closeButton:false,closeOnClick:true});
+
+map.on("load",async()=>{
+  let fc;
+  try{
+    const res=await fetch("./setores_am.geojson");
+    if(!res.ok)throw 0;
+    fc=await res.json();
+    document.getElementById("loading").remove();
+  }catch(e){
+    fc=mockGeo();
+    const l=document.getElementById("loading");
+    l.innerHTML="⚠ <b>setores_am.geojson</b> não encontrado.<br>Mostrando dados de exemplo.<br><span style='color:#6b7280'>No GitHub, coloque o arquivo ao lado do index.html.</span>";
+    setTimeout(()=>l.remove(),5200);
+  }
+  enrich(fc);
+  allFeats=fc.features;
+
+  map.addSource("setores",{type:"geojson",data:fc});
+  map.addLayer({id:"fill",type:"fill",source:"setores",paint:{"fill-opacity":0.78}});
+  map.addLayer({id:"line",type:"line",source:"setores",paint:{"line-color":"#ffffff","line-width":0.4}});
+
+  // pontos para o heatmap (centróides)
+  const pts={type:"FeatureCollection",features:allFeats.map(ft=>({type:"Feature",properties:ft.properties,geometry:{type:"Point",coordinates:centroid(ft.geometry)}}))};
+  map.addSource("centroides",{type:"geojson",data:pts});
+  map.addLayer({id:"heat",type:"heatmap",source:"centroides",layout:{visibility:"none"},paint:{
+    "heatmap-radius":28,"heatmap-intensity":1,
+    "heatmap-color":["interpolate",["linear"],["heatmap-density"],0,"rgba(0,0,0,0)",0.2,"#ffffb2",0.4,"#fd8d3c",0.6,"#f03b20",0.8,"#bd0026",1,"#7f0000"]
+  }});
+
+  buildMunicipios();
+  buildIndicadores();
+  applyAll();
+  fitTo(allFeats);
+
+  map.on("click","fill",e=>{
+    const p=e.features[0].properties, ind=INDICADORES[indKey];
+    popup.setLngLat(e.lngLat).setHTML(
+      `<b>${p.NM_BAIRRO||p.NM_MUN||"Setor"}</b><br>`+
+      `<span style="color:#6b7280">Setor ${p.CD_SETOR}</span><br>`+
+      `${ind.label}: <b>${p[indKey]!=null?ind.fmt(num(p[indKey])):"—"}</b><br>`+
+      `População: ${miles(num(p._pop))} · Renda: ${p._renda!=null?"R$ "+miles(p._renda):"—"}`
+    ).addTo(map);
+  });
+  map.on("mouseenter","fill",()=>map.getCanvas().style.cursor="pointer");
+  map.on("mouseleave","fill",()=>map.getCanvas().style.cursor="");
+});
+
+// ---------- Paleta e escala ----------
+function colorExpr(){
+  const ind=INDICADORES[indKey], ramp=RAMPS[ind.ramp];
+  const vals=filtered().map(f=>f.properties[indKey]).filter(v=>v!=null&&!isNaN(v));
+  const min=Math.min(...vals), max=Math.max(...vals);
+  const stops=[];const n=ramp.length;
+  for(let i=0;i<n;i++)stops.push(min+(i/(n-1))*(max-min||1),ramp[i]);
+  legend(min,max,ramp,ind);
+  return ["case",["==",["get",indKey],null],"#d1d5db",["interpolate",["linear"],["to-number",["get",indKey]],...stops]];
+}
+function legend(min,max,ramp,ind){
+  document.getElementById("legend").innerHTML=
+    `<div style="font-weight:600;margin-bottom:2px">${ind.label}</div>`+
+    `<div class="bar">${ramp.map(c=>`<span style="background:${c}"></span>`).join("")}</div>`+
+    `<div class="row"><span>${ind.fmt(min||0)}</span><span>${ind.fmt(max||0)}</span></div>`;
+}
+
+// ---------- Filtros e agregados ----------
+function filtered(){
+  return allFeats.filter(f=>{
+    const p=f.properties;
+    if(munSel!=="(todos)"&&p.NM_MUN!==munSel)return false;
+    if(bairroSel!=="(todos)"&&p.NM_BAIRRO!==bairroSel)return false;
+    return true;
+  });
+}
+function mapFilter(){
+  const c=["all"];
+  if(munSel!=="(todos)")c.push(["==",["get","NM_MUN"],munSel]);
+  if(bairroSel!=="(todos)")c.push(["==",["get","NM_BAIRRO"],bairroSel]);
+  return c;
+}
+function applyAll(){
+  map.setFilter("fill",mapFilter());
+  map.setFilter("line",mapFilter());
+  map.setFilter("heat",mapFilter());
+  map.setPaintProperty("fill","fill-color",colorExpr());
+  // heatmap weight normalizado pelo indicador
+  const vals=filtered().map(f=>f.properties[indKey]).filter(v=>v!=null);
+  const min=Math.min(...vals),max=Math.max(...vals);
+  map.setPaintProperty("heat","heatmap-weight",["interpolate",["linear"],["to-number",["coalesce",["get",indKey],min]],min,0,max,1]);
+  cards();
+}
+function cards(){
+  const fs=filtered().map(f=>f.properties);
+  const sum=k=>fs.reduce((a,p)=>a+num(p[k]),0);
+  const mean=k=>{const v=fs.map(p=>p[k]).filter(x=>x!=null);return v.length?v.reduce((a,b)=>a+num(b),0)/v.length:0;};
+  const pop=sum("_pop"),dom=sum("v0001"),area=sum("AREA_KM2");
+  const c=[["População",miles(pop)],["Domicílios",miles(dom)],
+    ["Renda média",fs.length?"R$ "+miles(mean("_renda")):"—"],
+    ["Densidade",area?miles(pop/area)+"/km²":"—"],
+    ["Setores",fs.length],["Área",area.toFixed(1)+" km²"]];
+  document.getElementById("cards").innerHTML=c.map(([k,v])=>
+    `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+}
+
+// ---------- UI ----------
+function buildIndicadores(){
+  document.getElementById("indicadores").innerHTML=Object.entries(INDICADORES).map(([k,v])=>
+    `<button class="ind ${k===indKey?'active':''}" data-k="${k}">${v.label}</button>`).join("");
+  document.querySelectorAll(".ind").forEach(b=>b.onclick=()=>{
+    indKey=b.dataset.k;
+    document.querySelectorAll(".ind").forEach(x=>x.classList.toggle("active",x===b));
+    applyAll();
+  });
+}
+function buildMunicipios(){
+  const muns=[...new Set(allFeats.map(f=>f.properties.NM_MUN).filter(Boolean))].sort();
+  document.getElementById("selMun").innerHTML=["(todos)",...muns].map(m=>`<option>${m}</option>`).join("");
+  document.getElementById("selMun").onchange=e=>{munSel=e.target.value;bairroSel="(todos)";buildBairros();applyAll();};
+  buildBairros();
+}
+function buildBairros(){
+  let bs;
+  if(munSel==="(todos)")bs=[];
+  else bs=[...new Set(allFeats.filter(f=>f.properties.NM_MUN===munSel).map(f=>f.properties.NM_BAIRRO).filter(Boolean))].sort();
+  const sel=document.getElementById("selBairro");
+  sel.innerHTML=["(todos)",...bs].map(b=>`<option>${b}</option>`).join("");
+  sel.disabled=bs.length===0;
+  sel.onchange=e=>{bairroSel=e.target.value;applyAll();fitTo(filtered());};
+}
+document.getElementById("btnHeat").onclick=function(){
+  heat=!heat;
+  map.setLayoutProperty("heat","visibility",heat?"visible":"none");
+  map.setPaintProperty("fill","fill-opacity",heat?0.12:0.78);
+  this.classList.toggle("on",heat);
+  this.textContent=heat?"🔥 Mapa de calor: ligado":"⊞ Mapa de calor: desligado";
+};
+document.getElementById("selMun"); // noop
+
+// ---------- Geometria utilitária ----------
+function centroid(g){
+  let xs=0,ys=0,n=0;
+  const polys=g.type==="MultiPolygon"?g.coordinates:[g.coordinates];
+  polys.forEach(poly=>poly[0].forEach(c=>{xs+=c[0];ys+=c[1];n++;}));
+  return n?[xs/n,ys/n]:[-60,-3.1];
+}
+function fitTo(feats){
+  if(!feats.length)return;
+  let minX=180,minY=90,maxX=-180,maxY=-90;
+  feats.forEach(f=>{
+    const polys=f.geometry.type==="MultiPolygon"?f.geometry.coordinates:[f.geometry.coordinates];
+    polys.forEach(p=>p[0].forEach(c=>{minX=Math.min(minX,c[0]);minY=Math.min(minY,c[1]);maxX=Math.max(maxX,c[0]);maxY=Math.max(maxY,c[1]);}));
+  });
+  map.fitBounds([[minX,minY],[maxX,maxY]],{padding:40,duration:600});
+}
+
+// ---------- PDF ----------
+document.getElementById("btnPdf").onclick=()=>{
+  const fs=filtered().map(f=>f.properties);
+  const sum=k=>fs.reduce((a,p)=>a+num(p[k]),0);
+  const mean=k=>{const v=fs.map(p=>p[k]).filter(x=>x!=null);return v.length?v.reduce((a,b)=>a+num(b),0)/v.length:0;};
+  const pop=sum("_pop"),dom=sum("v0001"),area=sum("AREA_KM2");
+  const nome=bairroSel!=="(todos)"?bairroSel:(munSel!=="(todos)"?munSel:"Amazonas (todos)");
+  const w=window.open("","_blank");
+  w.document.write(`<html><head><meta charset="utf-8"><title>Panorama — ${nome}</title>
+  <style>body{font-family:system-ui,sans-serif;padding:34px;color:#1f2937}
+  h1{font-size:20px;margin-bottom:2px}.s{color:#6b7280;font-size:13px;margin-bottom:18px}
+  .g{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .c{border:1px solid #e5e7eb;border-radius:10px;padding:12px}
+  .k{font-size:11px;color:#6b7280;text-transform:uppercase}.v{font-size:22px;font-weight:700;margin-top:2px}
+  .ft{margin-top:26px;font-size:10px;color:#9ca3af}</style></head><body>
+  <h1>Panorama — ${nome}</h1>
+  <div class="s">${fs.length} setores censitários · ${area.toFixed(1)} km²</div>
+  <div class="g">
+    <div class="c"><div class="k">População</div><div class="v">${miles(pop)}</div></div>
+    <div class="c"><div class="k">Domicílios</div><div class="v">${miles(dom)}</div></div>
+    <div class="c"><div class="k">Renda média do responsável</div><div class="v">R$ ${miles(mean("_renda"))}</div></div>
+    <div class="c"><div class="k">Densidade</div><div class="v">${area?miles(pop/area):"—"} hab/km²</div></div>
+    <div class="c"><div class="k">Moradores/domicílio</div><div class="v">${dom?(pop/dom).toFixed(2):"—"}</div></div>
+    <div class="c"><div class="k">Índice de envelhecimento</div><div class="v">${mean("_env").toFixed(1)}</div></div>
+  </div>
+  <p class="ft">Fonte: IBGE — Censo Demográfico 2022, Agregados por Setores Censitários. Gerado pelo Painel Censitário.</p>
+  </body></html>`);
+  w.document.close();w.focus();setTimeout(()=>w.print(),350);
+};
+</script>
